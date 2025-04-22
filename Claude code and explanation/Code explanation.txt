@@ -72,3 +72,65 @@ I'll explain the P4 code implementation step by step, focusing on how each secti
 5. **Access control**: Enforcing rules about which sources can send which types of traffic
 
 This P4 implementation demonstrates how programmable data planes can implement security directly in network devices, providing faster and more efficient protection than traditional security appliances.
+6. SlowRateDefense
+This section finishes the implementation of the slow-rate attack defense mechanism:
+
+Connection Tracking: For new connections, it initializes counters and timestamps.
+Attack Detection: For existing connections, it:
+
+Calculates packet rate (packets per second)
+Identifies suspicious patterns where:
+
+Packet rate is very low (less than 5 packets per second)
+Connection has been open for a while (more than 10 packets)
+Packets arrive at intervals designed to keep the connection alive (between 5-30 seconds)
+
+
+Drops packets that match this slow-rate attack pattern
+
+
+
+7. Comprehensive Ingress Pipeline
+This section orchestrates the security controls in a logical sequence:
+
+Order of Operations: Applies security controls in this specific order:
+
+IP spoofing checks first (foundational)
+DDoS protection
+MITM attack detection
+TCP sequence verification
+Slow-rate attack detection
+
+
+Sequential Processing: Each control is applied only if the packet hasn't already been flagged as malicious by a previous control.
+
+8. Egress Pipeline with Rate Limiting
+This implements a token bucket rate limiter on the egress side:
+
+Token Bucket Algorithm: Limits the rate of outgoing traffic by:
+
+Adding tokens based on elapsed time
+Consuming tokens based on packet size
+Dropping packets when not enough tokens are available
+
+
+Per-Port Rate Limiting: Each egress port has its own token bucket to prevent any single port from being overwhelmed.
+
+9. Checksums and Deparser
+These sections handle packet integrity:
+
+Checksum Verification: Validates incoming packet checksums to detect corrupted or modified packets.
+Checksum Computation: Updates checksums for outgoing packets.
+Deparser: Reassembles the packet headers in the correct order for transmission.
+
+10. Main Switch
+The final section connects all the components into a standard V1Switch pipeline:
+
+Parser
+Checksum verification
+Ingress processing
+Egress processing
+Checksum computation
+Deparser
+
+This comprehensive P4 implementation provides multiple layers of security directly in the network data plane, allowing for high-performance, line-rate packet inspection and protection against a wide range of network attacks.

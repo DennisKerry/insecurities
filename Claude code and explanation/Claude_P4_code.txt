@@ -429,3 +429,200 @@ control SlowRateDefense(inout headers_t hdr,
             // For new connections, initialize
             if (conn_packet_count == 0 || current_time - last_time > 30000000) { // 30 seconds timeout
                 connection_start
+connection_start_time.write(meta.packet_count, current_time);
+                packet_count_conn.write(meta.packet_count, 1);
+                last_packet_time.write(meta.packet_count, current_time);
+            } else {
+                // Update connection stats
+                conn_packet_count = conn_packet_count + 1;
+                packet_count_conn.write(meta.packet_count, conn_packet_count);
+                last_packet_time.write(meta.packet_count, current_time);
+                
+                // Check for slow-rate attack patterns
+                if (current_time - start_time > 10000000) { // 10 seconds
+                    // Check packet rate
+                    bit<32> packet_rate = (conn_packet_count * 1000000) / (current_time - start_time);
+                    
+                    // Check if it's a slow connection holding resources
+                    if (packet_rate < 5 && conn_packet_count > 10 && 
+                        (hdr.tcp.flags & 0x01 == 0)) { // Not a FIN packet
+                        
+                        // Check time between packets
+                        bit<32> inter_packet_time = current_time - last_time;
+                        
+                        // If packets are coming just slow enough to keep connection alive
+                        if (inter_packet_time > 5000000 && inter_packet_time < 30000000) {
+                            // Likely a slow-rate attack
+                            drop();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+//---------------------------------------------------
+// 7. COMPREHENSIVE INGRESS PIPELINE
+//---------------------------------------------------
+
+control MyIngress(inout headers_t hdr,
+                  inout metadata_t meta,
+                  inout standard_metadata_t standard_metadata) {
+    
+    DDoSDefense() ddos_defense;
+    MITMDefense() mitm_defense;
+    SpoofingDefense() spoofing_defense;
+    PacketInjectionDefense() injection_defense;
+    SlowRateDefense() slow_defense;
+    
+    apply {
+        // Apply security controls in sequence
+        meta.is_attack = 0;
+        
+        // 1. Check for IP spoofing first
+        spoofing_defense.apply(hdr, meta, standard_metadata);
+        
+        // 2. Apply DDoS protection
+        if (meta.is_attack == 0) {
+            ddos_defense.apply(hdr, meta, standard_metadata);
+        }
+        
+        // 3. Check for MITM attacks
+        if (meta.is_attack == 0) {
+            mitm_defense.apply(hdr, meta, standard_metadata);
+        }
+        
+        // 4. Verify TCP sequence numbers
+        if (meta.is_attack == 0 && hdr.tcp.isValid()) {
+            injection_defense.apply(hdr, meta, standard_metadata);
+        }
+        
+        // 5. Check for slow-rate attacks
+        if (meta.is_attack == 0 && hdr.tcp.isValid()) {
+            slow_defense.apply(hdr, meta, standard_metadata);
+        }
+        
+        // Normal packet processing can continue here
+    }
+}
+
+//---------------------------------------------------
+// 8. EGRESS PIPELINE WITH RATE LIMITING
+//---------------------------------------------------
+
+control MyEgress(inout headers_t hdr,
+                 inout metadata_t meta,
+                 inout standard_metadata_t standard_metadata) {
+    
+    // Token bucket rate limiter
+    register<bit<32>>(1024) token_bucket;
+    register<bit<32>>(1024) last_token_update;
+    
+    // Rate limit parameters
+    const bit<32> MAX_TOKENS = 1000;
+    const bit<32> TOKEN_RATE = 100; // Tokens per microsecond
+    
+    action compute_queue_hash() {
+        hash(meta.packet_count, HashAlgorithm.crc16, (bit<16>)0, 
+             {standard_metadata.egress_port}, (bit<32>)1024);
+    }
+    
+    apply {
+        compute_queue_hash();
+        
+        bit<32> tokens;
+        bit<32> last_update;
+        bit<32> current_time = standard_metadata.egress_global_timestamp;
+        
+        token_bucket.read(tokens, meta.packet_count);
+        last_token_update.read(last_update, meta.packet_count);
+        
+        // Add tokens based on elapsed time
+        bit<32> time_diff = current_time - last_update;
+        bit<32> new_tokens = time_diff * TOKEN_RATE;
+        
+        // Update token bucket
+        if (tokens + new_tokens > MAX_TOKENS) {
+            tokens = MAX_TOKENS;
+        } else {
+            tokens = tokens + new_tokens;
+        }
+        
+        // Check if we have enough tokens for this packet
+        if (tokens >= standard_metadata.packet_length) {
+            tokens = tokens - standard_metadata.packet_length;
+        } else {
+            mark_to_drop(standard_metadata);
+        }
+        
+        // Update registers
+        token_bucket.write(meta.packet_count, tokens);
+        last_token_update.write(meta.packet_count, current_time);
+    }
+}
+
+//---------------------------------------------------
+// 9. CHECKSUMS AND DEPARSER
+//---------------------------------------------------
+
+control MyVerifyChecksum(inout headers_t hdr, inout metadata_t meta) {
+    apply {
+        verify_checksum(
+            hdr.ipv4.isValid(),
+            { hdr.ipv4.version,
+              hdr.ipv4.ihl,
+              hdr.ipv4.diffserv,
+              hdr.ipv4.totalLen,
+              hdr.ipv4.identification,
+              hdr.ipv4.flags,
+              hdr.ipv4.fragOffset,
+              hdr.ipv4.ttl,
+              hdr.ipv4.protocol,
+              hdr.ipv4.srcAddr,
+              hdr.ipv4.dstAddr },
+            hdr.ipv4.hdrChecksum,
+            HashAlgorithm.csum16);
+    }
+}
+
+control MyComputeChecksum(inout headers_t hdr, inout metadata_t meta) {
+    apply {
+        update_checksum(
+            hdr.ipv4.isValid(),
+            { hdr.ipv4.version,
+              hdr.ipv4.ihl,
+              hdr.ipv4.diffserv,
+              hdr.ipv4.totalLen,
+              hdr.ipv4.identification,
+              hdr.ipv4.flags,
+              hdr.ipv4.fragOffset,
+              hdr.ipv4.ttl,
+              hdr.ipv4.protocol,
+              hdr.ipv4.srcAddr,
+              hdr.ipv4.dstAddr },
+            hdr.ipv4.hdrChecksum,
+            HashAlgorithm.csum16);
+    }
+}
+
+control MyDeparser(packet_out packet, in headers_t hdr) {
+    apply {
+        packet.emit(hdr.ethernet);
+        packet.emit(hdr.ipv4);
+        packet.emit(hdr.tcp);
+    }
+}
+
+//---------------------------------------------------
+// 10. MAIN SWITCH
+//---------------------------------------------------
+
+V1Switch(
+    MyParser(),
+    MyVerifyChecksum(),
+    MyIngress(),
+    MyEgress(),
+    MyComputeChecksum(),
+    MyDeparser()
+) main;
