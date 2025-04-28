@@ -1,3 +1,1 @@
-"# insecurities" 
-"# i want to make sure that this is working"
-"# i think it is"
+Our project focused on creating a P4-based firewall designed to detect and block different types of cyberattacks in a programmable network. What made this project different was that instead of writing all the code manually, we wanted to see if using large language models (LLMs) like ChatGPT and Copilot could help us develop working security strategies and P4 code. We set up a Mininet environment with two hosts and a BMv2 software switch, where we compiled and tested our P4 code. Throughout the project, we leaned on LLMs for help — sometimes successfully, and sometimes not. The project gave us a real-world view of both the advantages and challenges of using AI tools for technical development.
